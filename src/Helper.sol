@@ -18,7 +18,6 @@ contract Helper is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         uint256 cooldownPeriod;
     }
 
-    MultiplierData private _multipliers;
     mapping(uint8 => Tier) private _tiers;
     address public backendService;
 
@@ -27,8 +26,7 @@ contract Helper is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         __UUPSUpgradeable_init();
         backendService = _backendService;
 
-        // Initialize default multipliers and tiers
-        _multipliers = MultiplierData(1e18, 1e18, 1e18); // 1x multiplier for all actions
+        // Initialize default tiers
         _tiers[0] = Tier(0, 50, 1 days);
         _tiers[1] = Tier(1000, 75, 12 hours);
         _tiers[2] = Tier(5000, 100, 0);
@@ -39,24 +37,8 @@ contract Helper is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         _;
     }
 
-    function setMultipliers(MultiplierData memory newMultipliers) external onlyBackend {
-        _multipliers = newMultipliers;
-    }
-
     function setTier(uint8 tierLevel, Tier memory newTier) external onlyBackend {
         _tiers[tierLevel] = newTier;
-    }
-
-    function applyMultiplier(uint256 amount, uint8 actionType) external view returns (uint256) {
-        uint256 multiplier = 1e18; // Default 1x multiplier
-        if (actionType == 0) {
-            multiplier = _multipliers.liquidityMigrationMultiplier;
-        } else if (actionType == 1) {
-            multiplier = _multipliers.bridgingMultiplier;
-        } else if (actionType == 2) {
-            multiplier = _multipliers.socialMultiplier;
-        }
-        return (amount * multiplier) / 1e18;
     }
 
     function calculateTier(uint256 pointBalance) external view returns (uint8) {
