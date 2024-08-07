@@ -11,7 +11,7 @@ import "../src/XpMigrate.sol";
 import "../src/proxies/PointsProxy.sol";
 import "../src/proxies/HelperProxy.sol";
 import "../src/proxies/ClaimProxy.sol";
-import "../src/proxies/ProxyAdmin.sol";
+import "../src/proxies/IncentiveProxyAdmin.sol";
 
 contract DeployIncentiveScript is Script {
     using stdJson for string;
@@ -35,7 +35,7 @@ contract DeployIncentiveScript is Script {
         XpMigrate xpMigrate = new XpMigrate();
 
         // Deploy ProxyAdmin
-        SupermigrateProxyAdmin proxyAdmin = new SupermigrateProxyAdmin();
+        IncentiveProxyAdmin proxyAdmin = new IncentiveProxyAdmin();
 
         // Prepare initialization data
         bytes memory pointsData = abi.encodeWithSelector(Points(address(0)).initialize.selector, backendService);
