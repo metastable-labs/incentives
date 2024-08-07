@@ -8,7 +8,6 @@ This system manages MIGRATE points, which users earn through various actions, an
 
 The project consists of several smart contracts:
 
-- `ISupermigrate.sol`: Interface containing shared data structures and enums.
 - `Points.sol`: Manages the accumulation and tracking of MIGRATE points.
 - `Helper.sol`: Handles multipliers, tier calculations, and bonus mechanisms.
 - `xpMigrate.sol`: Implements the soulbound ERC20 token (non-upgradeable).
