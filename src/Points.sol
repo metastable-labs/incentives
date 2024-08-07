@@ -79,7 +79,7 @@ contract Points is Initializable, UUPSUpgradeable, OwnableUpgradeable, PausableU
     /// @notice Allows users to earn points for various actions
     /// @dev Can only be called by the backend service when the contract is not paused
     /// @param user The address of the user earning points
-    /// @param amount The base amount of points to be earned
+    /// @param amount The usd amount if any
     /// @param actionType The type of action performed to earn points
     /// @param isStaked Boolean indicating if the action involves staked tokens
     /// @param isFeaturedToken Boolean indicating if the action involves featured tokens
