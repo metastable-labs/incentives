@@ -38,15 +38,22 @@ contract DeployIncentiveScript is Script {
         IncentiveProxyAdmin proxyAdmin = new IncentiveProxyAdmin();
 
         // Prepare initialization data
-        bytes memory pointsData = abi.encodeWithSelector(Points(address(0)).initialize.selector, backendService);
-        bytes memory helperData = abi.encodeWithSelector(Helper(address(0)).initialize.selector, backendService);
+        // Deploy proxy for Claim first (we need its address for Points initialization)
         bytes memory claimData =
-            abi.encodeWithSelector(Claim(address(0)).initialize.selector, address(0), address(0), address(xpMigrate));
+            abi.encodeWithSelector(Claim.initialize.selector, address(0), address(0), address(xpMigrate));
+        TransparentUpgradeableProxy claimProxy =
+            new TransparentUpgradeableProxy(address(claimImpl), address(proxyAdmin), claimData);
 
-        // Deploy proxy contracts
-        PointsProxy pointsProxy = new PointsProxy(address(pointsImpl), address(proxyAdmin), pointsData);
-        HelperProxy helperProxy = new HelperProxy(address(helperImpl), address(proxyAdmin), helperData);
-        ClaimProxy claimProxy = new ClaimProxy(address(claimImpl), address(proxyAdmin), claimData);
+        // Deploy proxy for Points
+        bytes memory pointsData =
+            abi.encodeWithSelector(Points.initialize.selector, backendService, address(claimProxy));
+        TransparentUpgradeableProxy pointsProxy =
+            new TransparentUpgradeableProxy(address(pointsImpl), address(proxyAdmin), pointsData);
+
+        // Deploy proxy for Helper
+        bytes memory helperData = abi.encodeWithSelector(Helper.initialize.selector, backendService);
+        TransparentUpgradeableProxy helperProxy =
+            new TransparentUpgradeableProxy(address(helperImpl), address(proxyAdmin), helperData);
 
         // Set up contract interactions
         Points(address(pointsProxy)).setHelperContract(address(helperProxy));

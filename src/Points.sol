@@ -40,6 +40,7 @@ contract Points is Initializable, UUPSUpgradeable, OwnableUpgradeable, PausableU
 
     /// @notice Address of the backend service authorized to call certain functions
     address public backendService;
+    address public claimContract;
 
     /// @notice Emitted when a user earns points
     /// @param user The address of the user earning points
@@ -56,16 +57,23 @@ contract Points is Initializable, UUPSUpgradeable, OwnableUpgradeable, PausableU
     /// @notice Initializes the contract
     /// @dev Sets up the initial state and sets the backend service address
     /// @param _backendService Address of the backend service
-    function initialize(address _backendService) public initializer {
+    /// @param _claimContract Address of the claim contract
+    function initialize(address _backendService, address _claimContract) public initializer {
         __Ownable_init(msg.sender);
         __UUPSUpgradeable_init();
         __Pausable_init();
         backendService = _backendService;
+        claimContract = _claimContract;
     }
 
     /// @notice Modifier to restrict function access to only the backend service
     modifier onlyBackend() {
         require(msg.sender == backendService, "Only backend can call this function");
+        _;
+    }
+
+    modifier onlyClaimContract() {
+        require(msg.sender == claimContract, "Only Claim Contract can call this function");
         _;
     }
 
@@ -96,7 +104,7 @@ contract Points is Initializable, UUPSUpgradeable, OwnableUpgradeable, PausableU
         uint256 multiplier;
 
         if (actionType == ActionType.LIQUIDITY_MIGRATION) {
-            basePoints = (amount * 1000) / 10; // 1000 points per $10
+            basePoints = (amount * 1000); // 1000 points per $1
             multiplier = isStaked ? 250 : 100; // 2.5x for staked, 1x for non-staked
         } else if (actionType == ActionType.BRIDGING) {
             basePoints = amount * 500; // 500 points per $1
@@ -123,7 +131,11 @@ contract Points is Initializable, UUPSUpgradeable, OwnableUpgradeable, PausableU
     /// @param user The address of the user to deduct points from
     /// @param amount The amount of points to deduct
     /// @param reason The reason for deducting points
-    function deductPoints(address user, uint256 amount, string calldata reason) external onlyBackend whenNotPaused {
+    function deductPoints(address user, uint256 amount, string calldata reason)
+        external
+        onlyClaimContract
+        whenNotPaused
+    {
         require(_userData[user].pointBalance >= amount, "Insufficient points");
         _userData[user].pointBalance -= amount;
         _userData[user].tier = IHelper(helperContract).calculateTier(_userData[user].pointBalance);
