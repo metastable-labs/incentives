@@ -6,9 +6,15 @@ import "../src/Points.sol";
 import "../src/Helper.sol";
 import "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 
-// Mock Claim contract for testing
+// Updated MockClaim contract
 contract MockClaim {
+    address public pointsContract;
+
     function initialize(address, address, address) external {}
+
+    function setPointsContract(address _pointsContract) external {
+        pointsContract = _pointsContract;
+    }
 }
 
 contract PointsTest is Test {
@@ -42,6 +48,9 @@ contract PointsTest is Test {
 
         // Set helper contract in Points
         points.setHelperContract(address(helper));
+
+        // Set points contract in MockClaim
+        mockClaim.setPointsContract(address(points));
     }
 
     function testEarnPoints() public {
@@ -49,7 +58,7 @@ contract PointsTest is Test {
         points.earnPoints(address(0x2), 10, Points.ActionType.LIQUIDITY_MIGRATION, true, false, false);
 
         (uint256 balance,,,) = points.getUserData(address(0x2));
-        assertEq(balance, 25000); // 10 * 1000 * 2.5
+        assertEq(balance, 25_000); // 10 * 1000 * 2.5
     }
 
     function testDeductPoints() public {
@@ -58,11 +67,34 @@ contract PointsTest is Test {
         vm.stopPrank();
 
         vm.prank(address(mockClaim));
-        points.deductPoints(address(0x2), 10000, "Test deduction");
+        points.deductPoints(address(0x2), 10_000, "Test deduction");
 
         (uint256 balance,,,) = points.getUserData(address(0x2));
-        assertEq(balance, 15000);
+        assertEq(balance, 15_000);
     }
 
-    // Add more tests as needed...
+    function testOnlyClaimContractCanDeductPoints() public {
+        vm.prank(backend);
+        points.earnPoints(address(0x2), 10, Points.ActionType.LIQUIDITY_MIGRATION, true, false, false);
+
+        vm.expectRevert("Only Claim Contract can call this function");
+        points.deductPoints(address(0x2), 10_000, "Test deduction");
+    }
+
+    function testSetHelperContract() public {
+        address newHelper = address(0x3);
+
+        vm.prank(owner);
+        points.setHelperContract(newHelper);
+
+        assertEq(address(points.helperContract()), newHelper);
+    }
+
+    function testOnlyOwnerCanSetHelperContract() public {
+        address newHelper = address(0x3);
+
+        vm.prank(address(0x4));
+        vm.expectRevert("Ownable: caller is not the owner");
+        points.setHelperContract(newHelper);
+    }
 }

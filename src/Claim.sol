@@ -55,21 +55,20 @@ contract Claim is Initializable, UUPSUpgradeable, OwnableUpgradeable, PausableUp
 
     /// @notice Initializes the contract
     /// @dev This function replaces the constructor for upgradeable contracts
-    /// @param _pointsContract Address of the Points contract
     /// @param _helperContract Address of the Helper contract
     /// @param _xpMigrateContract Address of the XpMigrate token contract
-    function initialize(address _pointsContract, address _helperContract, address _xpMigrateContract)
-        public
-        initializer
-    {
+    function initialize(address _helperContract, address _xpMigrateContract) public initializer {
         __Ownable_init(msg.sender);
         __UUPSUpgradeable_init();
         __Pausable_init();
-        pointsContract = IPoints(_pointsContract);
         helperContract = IHelper(_helperContract);
         xpMigrateContract = IXpMigrate(_xpMigrateContract);
         baseConversionRate = 100; // 100 points = 1 xpMigrate token
         dynamicMultiplier = 1e18; // 1x multiplier
+    }
+
+    function setPointsContract(address _pointsContract) external onlyOwner {
+        pointsContract = IPoints(_pointsContract);
     }
 
     /// @notice Allows users to claim XpMigrate tokens based on their points

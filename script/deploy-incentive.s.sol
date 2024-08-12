@@ -1,72 +1,79 @@
-// SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.13;
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.19;
 
-import {Script, console} from "forge-std/Script.sol";
-import {stdJson} from "forge-std/StdJson.sol";
-
-import "../src/Points.sol";
+import "forge-std/Script.sol";
+import "../src/XpMigrate.sol";
 import "../src/Helper.sol";
 import "../src/Claim.sol";
-import "../src/XpMigrate.sol";
-import "../src/proxies/PointsProxy.sol";
-import "../src/proxies/HelperProxy.sol";
-import "../src/proxies/ClaimProxy.sol";
-import "../src/proxies/IncentiveProxyAdmin.sol";
+import "../src/Points.sol";
 
-contract DeployIncentiveScript is Script {
-    using stdJson for string;
+// Simple Proxy contract
+contract Proxy {
+    address public implementation;
+    address public admin;
 
-    function setUp() public {}
-
-    function run() public returns (address, address, address, address, address) {
-        // get pvt key from env file, log associated address
-        uint256 privateKey = vm.envUint("PRIVATE_KEY");
-
-        vm.startBroadcast(privateKey);
-
-        string memory deployConfigJson = getDeployConfigJson();
-
-        address backendService = deployConfigJson.readAddress(".backendService");
-
-        // Deploy implementation contracts
-        Points pointsImpl = new Points();
-        Helper helperImpl = new Helper();
-        Claim claimImpl = new Claim();
-        XpMigrate xpMigrate = new XpMigrate();
-
-        // Deploy ProxyAdmin
-        IncentiveProxyAdmin proxyAdmin = new IncentiveProxyAdmin();
-
-        // Prepare initialization data
-        // Deploy proxy for Claim first (we need its address for Points initialization)
-        bytes memory claimData =
-            abi.encodeWithSelector(Claim.initialize.selector, address(0), address(0), address(xpMigrate));
-        TransparentUpgradeableProxy claimProxy =
-            new TransparentUpgradeableProxy(address(claimImpl), address(proxyAdmin), claimData);
-
-        // Deploy proxy for Points
-        bytes memory pointsData =
-            abi.encodeWithSelector(Points.initialize.selector, backendService, address(claimProxy));
-        TransparentUpgradeableProxy pointsProxy =
-            new TransparentUpgradeableProxy(address(pointsImpl), address(proxyAdmin), pointsData);
-
-        // Deploy proxy for Helper
-        bytes memory helperData = abi.encodeWithSelector(Helper.initialize.selector, backendService);
-        TransparentUpgradeableProxy helperProxy =
-            new TransparentUpgradeableProxy(address(helperImpl), address(proxyAdmin), helperData);
-
-        // Set up contract interactions
-        Points(address(pointsProxy)).setHelperContract(address(helperProxy));
-        Claim(address(claimProxy)).initialize(address(pointsProxy), address(helperProxy), address(xpMigrate));
-        xpMigrate.setClaimContract(address(claimProxy));
-
-        vm.stopBroadcast();
-
-        return
-            (address(pointsProxy), address(helperProxy), address(claimProxy), address(xpMigrate), address(proxyAdmin));
+    constructor(address _implementation, address _admin, bytes memory _data) {
+        implementation = _implementation;
+        admin = _admin;
+        (bool success,) = implementation.delegatecall(_data);
+        require(success, "Initialization failed");
     }
 
-    function getDeployConfigJson() internal view returns (string memory json) {
-        json = vm.readFile(string.concat(vm.projectRoot(), "/script/config.json"));
+    fallback() external payable {
+        address _impl = implementation;
+        assembly {
+            calldatacopy(0, 0, calldatasize())
+            let result := delegatecall(gas(), _impl, 0, calldatasize(), 0, 0)
+            returndatacopy(0, 0, returndatasize())
+            switch result
+            case 0 { revert(0, returndatasize()) }
+            default { return(0, returndatasize()) }
+        }
+    }
+
+    receive() external payable {}
+}
+
+contract DeployIncentiveScript is Script {
+    function run() external {
+        uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        address backendService = vm.envAddress("BACKEND_SERVICE");
+
+        vm.startBroadcast(deployerPrivateKey);
+
+        // Deploy XpMigrate (non-upgradeable)
+        XpMigrate xpMigrate = new XpMigrate();
+        console.log("XpMigrate deployed to:", address(xpMigrate));
+
+        // Deploy Helper
+        Helper helperImpl = new Helper();
+        bytes memory helperData = abi.encodeWithSelector(Helper.initialize.selector, backendService);
+        Proxy helperProxy = new Proxy(address(helperImpl), msg.sender, helperData);
+        Helper helper = Helper(address(helperProxy));
+        console.log("Helper deployed to:", address(helper));
+
+        // Deploy Claim
+        Claim claimImpl = new Claim();
+        bytes memory claimData =
+            abi.encodeWithSelector(Claim.initialize.selector, address(0), address(helper), address(xpMigrate));
+        Proxy claimProxy = new Proxy(address(claimImpl), msg.sender, claimData);
+        Claim claim = Claim(address(claimProxy));
+        console.log("Claim deployed to:", address(claim));
+
+        // Deploy Points
+        Points pointsImpl = new Points();
+        bytes memory pointsData = abi.encodeWithSelector(Points.initialize.selector, backendService, address(claim));
+        Proxy pointsProxy = new Proxy(address(pointsImpl), msg.sender, pointsData);
+        Points points = Points(address(pointsProxy));
+        console.log("Points deployed to:", address(points));
+
+        // Set up contract interactions
+        points.setHelperContract(address(helper));
+        claim.setPointsContract(address(points));
+        xpMigrate.setClaimContract(address(claim));
+
+        console.log("Contract setup complete!");
+
+        vm.stopBroadcast();
     }
 }
