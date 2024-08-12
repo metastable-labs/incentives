@@ -2,43 +2,11 @@
 pragma solidity ^0.8.19;
 
 import "forge-std/Script.sol";
+import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "../src/XpMigrate.sol";
 import "../src/Helper.sol";
 import "../src/Claim.sol";
 import "../src/Points.sol";
-
-// Updated Proxy contract
-contract Proxy {
-    address public implementation;
-    address public admin;
-
-    constructor(address _implementation, bytes memory _data) {
-        implementation = _implementation;
-        admin = msg.sender;
-        (bool success,) = _implementation.delegatecall(_data);
-        require(success, "Initialization failed");
-    }
-
-    fallback() external payable {
-        _fallback();
-    }
-
-    receive() external payable {
-        _fallback();
-    }
-
-    function _fallback() internal {
-        address _impl = implementation;
-        assembly {
-            calldatacopy(0, 0, calldatasize())
-            let result := delegatecall(gas(), _impl, 0, calldatasize(), 0, 0)
-            returndatacopy(0, 0, returndatasize())
-            switch result
-            case 0 { revert(0, returndatasize()) }
-            default { return(0, returndatasize()) }
-        }
-    }
-}
 
 contract DeployIncentiveScript is Script {
     function run() external {
@@ -54,7 +22,7 @@ contract DeployIncentiveScript is Script {
         // Deploy Helper
         Helper helperImpl = new Helper();
         bytes memory helperData = abi.encodeWithSelector(Helper.initialize.selector, backendService);
-        Proxy helperProxy = new Proxy(address(helperImpl), helperData);
+        ERC1967Proxy helperProxy = new ERC1967Proxy(address(helperImpl), helperData);
         Helper helper = Helper(address(helperProxy));
         console.log("Helper deployed to:", address(helper));
 
@@ -62,14 +30,14 @@ contract DeployIncentiveScript is Script {
         Claim claimImpl = new Claim();
         bytes memory claimData =
             abi.encodeWithSelector(Claim.initialize.selector, address(0), address(helper), address(xpMigrate));
-        Proxy claimProxy = new Proxy(address(claimImpl), claimData);
+        ERC1967Proxy claimProxy = new ERC1967Proxy(address(claimImpl), claimData);
         Claim claim = Claim(address(claimProxy));
         console.log("Claim deployed to:", address(claim));
 
         // Deploy Points
         Points pointsImpl = new Points();
         bytes memory pointsData = abi.encodeWithSelector(Points.initialize.selector, backendService, address(claim));
-        Proxy pointsProxy = new Proxy(address(pointsImpl), pointsData);
+        ERC1967Proxy pointsProxy = new ERC1967Proxy(address(pointsImpl), pointsData);
         Points points = Points(address(pointsProxy));
         console.log("Points deployed to:", address(points));
 
