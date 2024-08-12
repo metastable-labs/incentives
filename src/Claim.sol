@@ -104,6 +104,23 @@ contract Claim is Initializable, UUPSUpgradeable, OwnableUpgradeable, PausableUp
         dynamicMultiplier = newMultiplier;
     }
 
+    function getClaimableAmount(address user) public view returns (uint256) {
+        (uint256 pointBalance, uint256 lastClaimTimestamp, uint8 tier,) = pointsContract.getUserData(user);
+
+        // Get tier data
+        (uint256 requiredPoints, uint256 claimPercentage, uint256 cooldownPeriod) = helperContract.getTierData(tier);
+
+        // Check if the cooldown period has passed
+        if (block.timestamp < lastClaimTimestamp + cooldownPeriod) {
+            return 0;
+        }
+
+        // Calculate the maximum claimable amount based on the tier's claim percentage
+        uint256 maxClaimable = (pointBalance * claimPercentage) / 100;
+
+        return maxClaimable;
+    }
+
     /// @notice Function to authorize an upgrade
     /// @dev Required by the UUPSUpgradeable contract
     /// @param newImplementation Address of the new implementation contract
