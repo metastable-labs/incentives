@@ -6,10 +6,10 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "./interfaces/IHelper.sol";
+import "./interfaces/IXpMigrate.sol";
 
 /// @title Points Contract for Incentive system
 /// @notice This contract manages the point system for users in the Supermigrate ecosystem
-/// @dev This contract is upgradeable and uses OpenZeppelin's upgradeable contracts
 contract Points is Initializable, UUPSUpgradeable, OwnableUpgradeable, PausableUpgradeable {
     /// @notice Struct to store user-specific data
     /// @param pointBalance The current point balance of the user
@@ -21,6 +21,14 @@ contract Points is Initializable, UUPSUpgradeable, OwnableUpgradeable, PausableU
         uint256 lastClaimTimestamp;
         uint8 tier;
         uint8 consecutiveWeeksClaimed;
+    }
+
+    /// @notice Struct to hold tier data
+    /// @dev Used to store and manage tier-specific information
+    struct Tier {
+        uint256 requiredPoints;
+        uint256 claimPercentage;
+        uint256 cooldownPeriod;
     }
 
     /// @notice Enum representing different types of actions that can earn points
@@ -35,12 +43,17 @@ contract Points is Initializable, UUPSUpgradeable, OwnableUpgradeable, PausableU
     /// @notice Mapping to store user data
     mapping(address => UserData) private _userData;
 
-    /// @notice Address of the helper contract
-    address public helperContract;
-
     /// @notice Address of the backend service authorized to call certain functions
     address public backendService;
-    address public claimContract;
+
+    /// @notice interface of the helper contract
+    IHelper public helperContract;
+    /// @notice Interface for the XpMigrate token contract
+    IXpMigrate public xpMigrateContract;
+
+    /// @notice Base conversion rate from points to tokens
+    /// @dev 100 points = 1 xpMigrate token
+    uint256 public baseConversionRate;
 
     /// @notice Emitted when a user earns points
     /// @param user The address of the user earning points
@@ -51,19 +64,25 @@ contract Points is Initializable, UUPSUpgradeable, OwnableUpgradeable, PausableU
     /// @notice Emitted when points are deducted from a user
     /// @param user The address of the user losing points
     /// @param amount The amount of points deducted
-    /// @param reason The reason for the point deduction
-    event PointsDeducted(address indexed user, uint256 amount, string reason);
+    event PointsDeducted(address indexed user, uint256 amount);
 
-    /// @notice Initializes the contract
-    /// @dev Sets up the initial state and sets the backend service address
-    /// @param _backendService Address of the backend service
-    /// @param _claimContract Address of the claim contract
-    function initialize(address _backendService, address _claimContract) public initializer {
+    /// @notice Emitted when a user successfully claims tokens
+    /// @param user Address of the user who claimed
+    /// @param pointsUsed Amount of points used for the claim
+    /// @param tokensMinted Amount of XpMigrate tokens minted
+    event Claimed(address indexed user, uint256 pointsUsed, uint256 tokensMinted);
+
+    function initialize(address _backendService, address _helperContract, address _xpMigrateContract)
+        public
+        initializer
+    {
         __Ownable_init(msg.sender);
         __UUPSUpgradeable_init();
         __Pausable_init();
         backendService = _backendService;
-        claimContract = _claimContract;
+        helperContract = IHelper(_helperContract);
+        xpMigrateContract = IXpMigrate(_xpMigrateContract);
+        baseConversionRate = 100; // 100 points = 1 xpMigrate token
     }
 
     /// @notice Modifier to restrict function access to only the backend service
@@ -72,74 +91,55 @@ contract Points is Initializable, UUPSUpgradeable, OwnableUpgradeable, PausableU
         _;
     }
 
-    modifier onlyClaimContract() {
-        require(msg.sender == claimContract, "Only Claim Contract can call this function");
-        _;
-    }
-
-    /// @notice Sets the address of the helper contract
-    /// @dev Can only be called by the contract owner
-    /// @param _helperContract The address of the new helper contract
-    function setHelperContract(address _helperContract) external onlyOwner {
-        helperContract = _helperContract;
-    }
-
-    /// @notice Allows users to earn points for various actions
+    /// @notice Allows backend service to record points for users
     /// @dev Can only be called by the backend service when the contract is not paused
     /// @param user The address of the user earning points
-    /// @param amount The usd amount if any
+    /// @param pointsAmount The number of points to record for user
     /// @param actionType The type of action performed to earn points
-    /// @param isStaked Boolean indicating if the action involves staked tokens
-    /// @param isFeaturedToken Boolean indicating if the action involves featured tokens
-    /// @param isMigratedToken Boolean indicating if the action involves migrated tokens
-    function earnPoints(
-        address user,
-        uint256 amount,
-        ActionType actionType,
-        bool isStaked,
-        bool isFeaturedToken,
-        bool isMigratedToken
-    ) external onlyBackend whenNotPaused {
-        uint256 basePoints;
-        uint256 multiplier;
-
-        if (actionType == ActionType.LIQUIDITY_MIGRATION) {
-            basePoints = (amount * 1000); // 1000 points per $1
-            multiplier = isStaked ? 250 : 100; // 2.5x for staked, 1x for non-staked
-        } else if (actionType == ActionType.BRIDGING) {
-            basePoints = amount * 500; // 500 points per $1
-            if (isMigratedToken) {
-                multiplier = 300; // 3x for migrated tokens
-            } else if (isFeaturedToken) {
-                multiplier = 150; // 1.5x for featured tokens
-            } else {
-                multiplier = 100; // 1x for normal tokens
-            }
-        } else {
-            basePoints = amount;
-            multiplier = 100; // 1x for other actions
-        }
-
-        uint256 totalPoints = (basePoints * multiplier) / 100;
-        _userData[user].pointBalance += totalPoints;
-        _userData[user].tier = IHelper(helperContract).calculateTier(_userData[user].pointBalance);
-        emit PointsEarned(user, totalPoints, actionType);
+    function recordPoints(address user, uint256 pointsAmount, ActionType actionType)
+        external
+        onlyBackend
+        whenNotPaused
+    {
+        _userData[user].pointBalance += pointsAmount;
+        _userData[user].tier = helperContract.calculateTier(_userData[user].pointBalance);
+        emit PointsEarned(user, pointsAmount, actionType);
     }
 
     /// @notice Deducts points from a user
     /// @dev Can only be called by the backend service when the contract is not paused
     /// @param user The address of the user to deduct points from
     /// @param amount The amount of points to deduct
-    /// @param reason The reason for deducting points
-    function deductPoints(address user, uint256 amount, string calldata reason)
-        external
-        onlyClaimContract
-        whenNotPaused
-    {
+    function _deductPoints(address user, uint256 amount) internal onlyBackend whenNotPaused {
         require(_userData[user].pointBalance >= amount, "Insufficient points");
         _userData[user].pointBalance -= amount;
-        _userData[user].tier = IHelper(helperContract).calculateTier(_userData[user].pointBalance);
-        emit PointsDeducted(user, amount, reason);
+        _userData[user].tier = helperContract.calculateTier(_userData[user].pointBalance);
+        emit PointsDeducted(user, amount);
+    }
+
+    /// @notice Allows users to claim XpMigrate tokens based on their points
+    /// @dev Checks user's tier, cooldown period, and claimable amount before minting tokens
+    /// @param pointAmount The amount of points the user wants to convert to tokens
+    function claim(uint256 pointAmount) external whenNotPaused {
+        (uint256 pointBalance, uint256 lastClaimTimestamp, uint8 tier, uint8 consecutiveWeeksClaimed) =
+            _getUserData(msg.sender);
+        UserData memory userData = UserData(pointBalance, lastClaimTimestamp, tier, consecutiveWeeksClaimed);
+
+        require(pointAmount > 0 && pointAmount <= userData.pointBalance, "Invalid point amount");
+
+        uint8 userTier = helperContract.calculateTier(userData.pointBalance);
+        (uint256 requiredPoints, uint256 claimPercentage, uint256 cooldownPeriod) = helperContract.getTierData(userTier);
+        Tier memory tierData = Tier(requiredPoints, claimPercentage, cooldownPeriod);
+
+        require(block.timestamp >= userData.lastClaimTimestamp + tierData.cooldownPeriod, "Cooldown period not elapsed");
+        require(pointAmount <= (userData.pointBalance * tierData.claimPercentage) / 100, "Exceeds claimable amount");
+
+        uint256 tokenAmount = pointAmount / baseConversionRate; // Remove the division by 1e18
+
+        _deductPoints(msg.sender, pointAmount);
+        xpMigrateContract.mint(msg.sender, tokenAmount);
+
+        emit Claimed(msg.sender, pointAmount, tokenAmount);
     }
 
     /// @notice Retrieves the data for a specific user
@@ -148,13 +148,38 @@ contract Points is Initializable, UUPSUpgradeable, OwnableUpgradeable, PausableU
     /// @return lastClaimTimestamp The timestamp of the user's last claim
     /// @return tier The current tier of the user
     /// @return consecutiveWeeksClaimed The number of consecutive weeks the user has claimed
-    function getUserData(address user)
-        external
+    function _getUserData(address user)
+        internal
         view
         returns (uint256 pointBalance, uint256 lastClaimTimestamp, uint8 tier, uint8 consecutiveWeeksClaimed)
     {
         UserData memory userData = _userData[user];
         return (userData.pointBalance, userData.lastClaimTimestamp, userData.tier, userData.consecutiveWeeksClaimed);
+    }
+
+    function getUserData(address user)
+        external
+        view
+        returns (uint256 pointBalance, uint256 lastClaimTimestamp, uint8 tier, uint8 consecutiveWeeksClaimed)
+    {
+        return _getUserData(user);
+    }
+
+    function getClaimableAmount(address user) public view returns (uint256) {
+        (uint256 pointBalance, uint256 lastClaimTimestamp, uint8 tier,) = _getUserData(user);
+
+        // Get tier data
+        (uint256 requiredPoints, uint256 claimPercentage, uint256 cooldownPeriod) = helperContract.getTierData(tier);
+
+        // Check if the cooldown period has passed
+        if (block.timestamp < lastClaimTimestamp + cooldownPeriod) {
+            return 0;
+        }
+
+        // Calculate the maximum claimable amount based on the tier's claim percentage
+        uint256 maxClaimable = (pointBalance * claimPercentage) / 100;
+
+        return maxClaimable;
     }
 
     /// @notice Function to authorize an upgrade

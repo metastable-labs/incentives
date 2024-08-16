@@ -3,98 +3,120 @@ pragma solidity ^0.8.0;
 
 import "forge-std/Test.sol";
 import "../src/Points.sol";
-import "../src/Helper.sol";
-import "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
+import "../src/interfaces/IHelper.sol";
+import "../src/interfaces/IXpMigrate.sol";
 
-// Updated MockClaim contract
-contract MockClaim {
-    address public pointsContract;
+contract MockHelper is IHelper {
+    function calculateTier(uint256 pointBalance) external pure returns (uint8) {
+        if (pointBalance >= 5000) return 2; // Gold
+        if (pointBalance >= 1000) return 1; // Silver
+        return 0; // Bronze
+    }
 
-    function initialize(address, address, address) external {}
+    function getTierData(uint8 tier) external pure returns (uint256, uint256, uint256) {
+        if (tier == 2) return (5000, 100, 0); // Gold: 5000 points, 100% claim, 0 cooldown
+        if (tier == 1) return (1000, 75, 12 hours); // Silver: 1000 points, 75% claim, 12 hours cooldown
+        return (0, 50, 24 hours); // Bronze: 0 points, 50% claim, 24 hours cooldown
+    }
+}
 
-    function setPointsContract(address _pointsContract) external {
-        pointsContract = _pointsContract;
+contract MockXpMigrate is IXpMigrate {
+    mapping(address => uint256) public balances;
+
+    function mint(address to, uint256 amount) external {
+        balances[to] += amount;
     }
 }
 
 contract PointsTest is Test {
     Points public points;
-    Helper public helper;
-    MockClaim public mockClaim;
-    address public owner;
-    address public backend;
+    MockHelper public helper;
+    MockXpMigrate public xpMigrate;
+    address public backendService;
 
     function setUp() public {
-        owner = address(this);
-        backend = address(0x1);
+        backendService = address(this);
+        helper = new MockHelper();
+        xpMigrate = new MockXpMigrate();
 
-        // Deploy implementation contracts
-        Points pointsImpl = new Points();
-        Helper helperImpl = new Helper();
-        mockClaim = new MockClaim();
-
-        // Deploy proxies
-        TransparentUpgradeableProxy pointsProxy = new TransparentUpgradeableProxy(
-            address(pointsImpl), owner, abi.encodeWithSelector(Points.initialize.selector, backend, address(mockClaim))
-        );
-
-        TransparentUpgradeableProxy helperProxy = new TransparentUpgradeableProxy(
-            address(helperImpl), owner, abi.encodeWithSelector(Helper.initialize.selector, backend)
-        );
-
-        // Get proxied contracts
-        points = Points(address(pointsProxy));
-        helper = Helper(address(helperProxy));
-
-        // Set helper contract in Points
-        points.setHelperContract(address(helper));
-
-        // Set points contract in MockClaim
-        mockClaim.setPointsContract(address(points));
+        points = new Points();
+        points.initialize(backendService, address(helper), address(xpMigrate));
     }
 
-    function testEarnPoints() public {
-        vm.prank(backend);
-        points.earnPoints(address(0x2), 10, Points.ActionType.LIQUIDITY_MIGRATION, true, false, false);
-
-        (uint256 balance,,,) = points.getUserData(address(0x2));
-        assertEq(balance, 25_000); // 10 * 1000 * 2.5
+    function testInitialize() public {
+        assertEq(points.backendService(), backendService);
+        assertEq(address(points.helperContract()), address(helper));
+        assertEq(address(points.xpMigrateContract()), address(xpMigrate));
+        assertEq(points.baseConversionRate(), 100);
     }
 
-    function testDeductPoints() public {
-        vm.startPrank(backend);
-        points.earnPoints(address(0x2), 10, Points.ActionType.LIQUIDITY_MIGRATION, true, false, false);
-        vm.stopPrank();
-
-        vm.prank(address(mockClaim));
-        points.deductPoints(address(0x2), 10_000, "Test deduction");
-
-        (uint256 balance,,,) = points.getUserData(address(0x2));
-        assertEq(balance, 15_000);
+    function testRecordPoints() public {
+        points.recordPoints(address(1), 1000, Points.ActionType.LIQUIDITY_MIGRATION);
+        (uint256 balance,, uint8 tier,) = points.getUserData(address(1));
+        assertEq(balance, 1000);
+        assertEq(tier, 1); // Silver tier
     }
 
-    function testOnlyClaimContractCanDeductPoints() public {
-        vm.prank(backend);
-        points.earnPoints(address(0x2), 10, Points.ActionType.LIQUIDITY_MIGRATION, true, false, false);
-
-        vm.expectRevert("Only Claim Contract can call this function");
-        points.deductPoints(address(0x2), 10_000, "Test deduction");
+    function testRecordPointsOnlyBackend() public {
+        vm.prank(address(0xdead));
+        vm.expectRevert("Only backend can call this function");
+        points.recordPoints(address(1), 1000, Points.ActionType.LIQUIDITY_MIGRATION);
     }
 
-    function testSetHelperContract() public {
-        address newHelper = address(0x3);
-
-        vm.prank(owner);
-        points.setHelperContract(newHelper);
-
-        assertEq(address(points.helperContract()), newHelper);
+    function testClaim() public {
+        points.recordPoints(address(this), 1000, Points.ActionType.LIQUIDITY_MIGRATION);
+        vm.warp(block.timestamp + 13 hours); // Wait for cooldown
+        points.claim(500);
+        (uint256 balance,,,) = points.getUserData(address(this));
+        assertEq(balance, 500);
+        assertEq(xpMigrate.balances(address(this)), 5); // 500 / 100
     }
 
-    function testOnlyOwnerCanSetHelperContract() public {
-        address newHelper = address(0x3);
+    function testClaimExceedsBalance() public {
+        points.recordPoints(address(this), 1000, Points.ActionType.LIQUIDITY_MIGRATION);
+        vm.warp(block.timestamp + 13 hours); // Wait for cooldown
+        vm.expectRevert("Invalid point amount");
+        points.claim(1001);
+    }
 
-        vm.prank(address(0x4));
-        vm.expectRevert("Ownable: caller is not the owner");
-        points.setHelperContract(newHelper);
+    function testClaimExceedsClaimablePercentage() public {
+        points.recordPoints(address(this), 1000, Points.ActionType.LIQUIDITY_MIGRATION);
+        vm.warp(block.timestamp + 13 hours); // Wait for cooldown
+        vm.expectRevert("Exceeds claimable amount");
+        points.claim(800); // Silver tier can only claim 75%
+    }
+
+    function testClaimBeforeCooldown() public {
+        points.recordPoints(address(this), 1000, Points.ActionType.LIQUIDITY_MIGRATION);
+        vm.expectRevert("Cooldown period not elapsed");
+        points.claim(500);
+    }
+
+    function testGetClaimableAmount() public {
+        points.recordPoints(address(this), 1000, Points.ActionType.LIQUIDITY_MIGRATION);
+        vm.warp(block.timestamp + 13 hours); // Wait for cooldown
+        uint256 claimable = points.getClaimableAmount(address(this));
+        assertEq(claimable, 750); // 75% of 1000
+    }
+
+    function testGetClaimableAmountDuringCooldown() public {
+        points.recordPoints(address(this), 1000, Points.ActionType.LIQUIDITY_MIGRATION);
+        uint256 claimable = points.getClaimableAmount(address(this));
+        assertEq(claimable, 0); // During cooldown
+    }
+
+    function testMultipleClaims() public {
+        points.recordPoints(address(this), 10_000, Points.ActionType.LIQUIDITY_MIGRATION);
+        vm.warp(block.timestamp + 1 hours);
+        points.claim(5000);
+        (uint256 balance,,,) = points.getUserData(address(this));
+        assertEq(balance, 5000);
+        assertEq(xpMigrate.balances(address(this)), 50);
+
+        vm.warp(block.timestamp + 1 hours);
+        points.claim(5000);
+        (balance,,,) = points.getUserData(address(this));
+        assertEq(balance, 0);
+        assertEq(xpMigrate.balances(address(this)), 100);
     }
 }
