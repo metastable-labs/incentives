@@ -119,4 +119,57 @@ contract PointsTest is Test {
         assertEq(balance, 0);
         assertEq(xpMigrate.balances(address(this)), 100);
     }
+
+    function testGetAllUsersData() public {
+        address[] memory testUsers = new address[](3);
+        testUsers[0] = address(0x1);
+        testUsers[1] = address(0x2);
+        testUsers[2] = address(0x3);
+
+        for (uint256 i = 0; i < testUsers.length; i++) {
+            points.recordPoints(testUsers[i], (i + 1) * 1000, Points.ActionType.LIQUIDITY_MIGRATION);
+        }
+
+        (address[] memory users, Points.UserData[] memory userData) = points.getAllUsersData(0, 3);
+
+        assertEq(users.length, 3);
+        assertEq(userData.length, 3);
+
+        for (uint256 i = 0; i < users.length; i++) {
+            assertEq(users[i], testUsers[i]);
+            assertEq(userData[i].pointBalance, (i + 1) * 1000);
+            assertEq(userData[i].tier, i == 0 ? 1 : 2); // 1000 points is Silver, 2000+ is Gold
+        }
+    }
+
+    function testGetAllUsersDataPagination() public {
+        for (uint256 i = 0; i < 5; i++) {
+            points.recordPoints(address(uint160(i + 1)), (i + 1) * 1000, Points.ActionType.LIQUIDITY_MIGRATION);
+        }
+
+        (address[] memory users1, Points.UserData[] memory userData1) = points.getAllUsersData(0, 3);
+        (address[] memory users2, Points.UserData[] memory userData2) = points.getAllUsersData(3, 5);
+
+        assertEq(users1.length, 3);
+        assertEq(userData1.length, 3);
+        assertEq(users2.length, 2);
+        assertEq(userData2.length, 2);
+
+        assertEq(users1[0], address(0x1));
+        assertEq(users2[0], address(0x4));
+    }
+
+    function testGetTotalUsers() public {
+        for (uint256 i = 0; i < 5; i++) {
+            points.recordPoints(address(uint160(i + 1)), 1000, Points.ActionType.LIQUIDITY_MIGRATION);
+        }
+
+        uint256 totalUsers = points.getTotalUsers();
+        assertEq(totalUsers, 5);
+
+        // Record points for an existing user
+        points.recordPoints(address(0x1), 1000, Points.ActionType.BRIDGING);
+        totalUsers = points.getTotalUsers();
+        assertEq(totalUsers, 5, "Total users should not increase for existing user");
+    }
 }
