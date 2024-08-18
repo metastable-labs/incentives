@@ -43,8 +43,16 @@ contract Points is Initializable, UUPSUpgradeable, OwnableUpgradeable, PausableU
     /// @notice Mapping to store user data
     mapping(address => UserData) private _userData;
 
+    /// @notice Array to keep track of all user addresses
+    address[] private userAddresses;
+
+    /// @notice Mapping to check if an address is already in the userAddresses array
+    mapping(address => bool) private isUser;
+
     /// @notice Address of the backend service authorized to call certain functions
     address public backendService;
+    /// @notice Total number of points distributed
+    uint256 public totalPointsDistributed;
 
     /// @notice interface of the helper contract
     IHelper public helperContract;
@@ -101,8 +109,13 @@ contract Points is Initializable, UUPSUpgradeable, OwnableUpgradeable, PausableU
         onlyBackend
         whenNotPaused
     {
+        if (!isUser[user]) {
+            userAddresses.push(user);
+            isUser[user] = true;
+        }
         _userData[user].pointBalance += pointsAmount;
         _userData[user].tier = helperContract.calculateTier(_userData[user].pointBalance);
+        totalPointsDistributed += pointsAmount;
         emit PointsEarned(user, pointsAmount, actionType);
     }
 
@@ -180,6 +193,42 @@ contract Points is Initializable, UUPSUpgradeable, OwnableUpgradeable, PausableU
         uint256 maxClaimable = (pointBalance * claimPercentage) / 100;
 
         return maxClaimable;
+    }
+
+    /// @notice Retrieves the total number of points distributed
+    /// @return The total number of points distributed
+    function getTotalPointsDistributed() external view returns (uint256) {
+        return totalPointsDistributed;
+    }
+
+    /// @notice Retrieves data for all users
+    /// @param start The starting index for pagination
+    /// @param end The ending index for pagination (exclusive)
+    /// @return users An array of user addresses
+    /// @return userData An array of UserData structs corresponding to the user addresses
+    function getAllUsersData(uint256 start, uint256 end)
+        external
+        view
+        returns (address[] memory users, UserData[] memory userData)
+    {
+        require(start < end && end <= userAddresses.length, "Invalid range");
+
+        uint256 length = end - start;
+        users = new address[](length);
+        userData = new UserData[](length);
+
+        for (uint256 i = 0; i < length; i++) {
+            users[i] = userAddresses[start + i];
+            userData[i] = _userData[users[i]];
+        }
+
+        return (users, userData);
+    }
+
+    /// @notice Returns the total number of users
+    /// @return The total number of unique users
+    function getTotalUsers() external view returns (uint256) {
+        return userAddresses.length;
     }
 
     /// @notice Function to authorize an upgrade
